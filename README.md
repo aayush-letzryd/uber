@@ -1,77 +1,114 @@
-# LetzRyd Uber Data Pipeline (Autonomous GCP Service)
+# LetzRyd Uber Automated Data Pipeline
 
-Production-grade, scheduled automated ETL pipeline designed to extract, normalize, and ingest **all 4 Uber Supplier API Data Streams** into PostgreSQL for LetzRyd's operating fleets across Bangalore (`BLR P`), Hyderabad (`HYD P`), and Mumbai (`MUM P`).
-
-Target GitHub Repository: `https://github.com/aayush-letzryd/uber`
+Autonomous, self-healing data pipeline running on **Google Cloud Platform (Cloud Run Jobs + Cloud Scheduler)** that pulls all 4 essential Uber Vehicle Suppliers API streams daily at **4:00 AM IST (non-working hours)**, batch-upserts clean structured data into PostgreSQL, and sends executive HTML email reports to `vendor_aayush@letzryd.com`.
 
 ---
 
-## 🏗️ 4-Stream Architecture
+## 🌟 Key Features
+
+* **Dynamic City / Fleet Auto-Discovery**: Automatically queries `/v1/vehicle-suppliers/orgs` so any newly onboarded city (e.g. Delhi, Pune, Chennai) or sub-fleet is synced automatically without code changes.
+* **4-Stream Full Ingestion**:
+  1. `REPORT_TYPE_TRIP_ACTIVITY` $\rightarrow$ `uber_pipeline_trips` (Vehicle plate `car_no`, driver UUID, GPS pickup/dropoff, distance, status, product tier, fare).
+  2. `REPORT_TYPE_PAYMENTS_ORDER` $\rightarrow$ `uber_pipeline_order_transactions` (Txn UUID, Quest bonuses, vehicle incentives, India TDS withholdings).
+  3. `REPORT_TYPE_PAYMENTS_DRIVER` $\rightarrow$ `uber_pipeline_driver_payments` (Driver weekly settlements).
+  4. `REPORT_TYPE_PAYMENTS_ORGANIZATION` $\rightarrow$ `uber_pipeline_org_payments` (Master fleet balance statements).
+* **Zero Duplicate Idempotency**: `ON CONFLICT DO UPDATE` ensures manual force runs or backfills never corrupt or duplicate history.
+* **Resilient Uber API Architecture**: Active queue interception (no queue backlog), in-memory multi-chunk ZIP extraction, and HTTP 429 backoff with randomized jitter.
+* **Executive HTML Email Notification**: Clean, professional operational summary matching LetzRyd branding delivered upon run completion.
+
+---
+
+## 🏗️ Architecture
 
 ```mermaid
-flowchart TD
-    subgraph GCP ["Google Cloud Platform (asia-south1)"]
-        SCHED["Google Cloud Scheduler<br/>0 4 * * * IST (Non-Working Hours)"] -->|Authenticated POST| CR["Google Cloud Run Job<br/>(uber-data-automation-job)"]
-        SEC["GCP Secret Manager"] -->|Inject Env| CR
-    end
-
-    subgraph UBER_API ["Uber Vehicle Suppliers API"]
-        CR -->|1. Request 4 Streams| U["Uber Reports API"]
-        U -->|2. Asynchronous Polling| CR
-        U -->|3. Multi-Chunk S3 Download| CR
-    end
-
-    subgraph DB ["PostgreSQL Cloud SQL (35.200.196.113)"]
-        CR -->|4. Idempotent Batch UPSERT| T1[("uber_pipeline_trips")]
-        CR -->|4. Idempotent Batch UPSERT| T2[("uber_pipeline_order_transactions")]
-        CR -->|4. Idempotent Batch UPSERT| T3[("uber_pipeline_driver_payments")]
-        CR -->|4. Idempotent Batch UPSERT| T4[("uber_pipeline_org_payments")]
-        CR -->|Audit Run Log| L[("uber_pipeline_execution_logs")]
-    end
-
-    subgraph ALERTS ["SMTP Alert Engine"]
-        CR -->|5. HTML Summary Email| E["vendor_aayush@letzryd.com"]
-    end
+flowchart LR
+    SCHED["🕒 Cloud Scheduler<br/>(0 4 * * * Asia/Kolkata)"] -->|OIDC Auth POST| CR_JOB["🚀 Cloud Run Job<br/>(uber-data-pipeline-job)"]
+    CR_JOB -->|Dynamic Discovery| ORGS["Uber API (/orgs)"]
+    CR_JOB -->|4 Streams| REPORTS["Uber Reports Engine"]
+    CR_JOB -->|Idempotent Batch UPSERT| DB[("PostgreSQL Database<br/>35.200.196.113")]
+    CR_JOB -->|HTML Summary| EMAIL["vendor_aayush@letzryd.com"]
 ```
 
 ---
 
-## ⏰ Optimal Timing: 4:00 AM IST (Non-Working Hours)
+## 🗄️ Database Tables (`postgres`)
 
-Running at **4:00 AM IST** guarantees:
-1. **Zero Operational Conflict**: Operations team does not touch the Uber portal during this window, preventing manual report rate limit collisions.
-2. **Data Finalization**: Uber's backend finalizes all ride settlement calculations for the preceding calendar day (which ends at 23:59:59 IST) by ~2:30 AM.
-3. **Morning Readiness**: All trips, vehicle plates, transactions, Quest bonuses, and driver payouts are processed and ready in the database before the morning shift begins.
-
----
-
-## 🛡️ Force Run & Idempotency Guarantee
-
-If you manually trigger a force run in Google Cloud Run at **ANY hour** (e.g. 2 PM, 7 PM, etc.):
-* **Zero Data Breakage**: Existing history stays 100% intact.
-* **No Duplicate Rows**: Tables use natural composite primary keys (`ON CONFLICT DO UPDATE`).
-* **Active Queue Interception**: The system checks Uber's server for existing active jobs before submitting new POST requests to avoid queue congestion.
+| Table Name | Description | Natural Unique Key |
+| :--- | :--- | :--- |
+| **`uber_pipeline_trips`** | Full trip telemetry, physical car number plate (`car_no`), GPS routes | `trip_uuid` |
+| **`uber_pipeline_order_transactions`** | Granular financial ledger, Quest bonuses, India TDS withholdings | `transaction_uuid` |
+| **`uber_pipeline_driver_payments`** | Aggregated driver settlement summaries | `(driver_uuid, org_name, report_fetch_window_start, report_fetch_window_end)` |
+| **`uber_pipeline_org_payments`** | Master organizational accounting statements | `(organization_uuid, report_fetch_window_start, report_fetch_window_end)` |
+| **`uber_pipeline_execution_logs`** | Execution audit history & run metrics | `run_id` |
+| **`uber_pipeline_sync_state`** | High-water mark state tracker | `(fleet_id, stream_name)` |
 
 ---
 
-## 🚀 Quickstart & Commands
+## 🚀 CLI & Operations Runbook
 
-### 1. Run Schema Migration
-```bash
-psql -h 35.200.196.113 -U postgres -d postgres -f sql/001_create_pipeline_tables.sql
-```
-
-### 2. Run Daily Ingestion Locally / Force Run
+### 1. Run Pipeline for Yesterday (Default Scheduled Run)
 ```bash
 python -m src.runner
 ```
 
-### 3. Backfill Last 7 Days (Last Week)
+### 2. Run Pipeline for a Specific Date
 ```bash
-python -m src.backfill --days 7
+python -m src.runner --date 2026-08-24
 ```
 
-### 4. Backfill Custom Date Range
+### 3. Historical Backfill Engine
 ```bash
-python -m src.backfill --start 2026-08-15 --end 2026-08-25
+# Backfill last 7 days (auto-chunked in 72h windows)
+python -m src.backfill --days 7
+
+# Backfill custom date interval
+python -m src.backfill --start 2026-08-10 --end 2026-08-25
 ```
+
+---
+
+## ☁️ Google Cloud Platform Deployment
+
+### 1. Build Container (Google Artifact Registry)
+```bash
+gcloud builds submit --tag asia-south1-docker.pkg.dev/letzryd-dev-test/letzryd-apps/uber-pipeline:latest .
+```
+
+### 2. Deploy Cloud Run Job
+```bash
+gcloud run jobs deploy uber-data-pipeline-job \
+    --image=asia-south1-docker.pkg.dev/letzryd-dev-test/letzryd-apps/uber-pipeline:latest \
+    --region=asia-south1 \
+    --cpu=2 \
+    --memory=2Gi \
+    --max-retries=3 \
+    --task-timeout=3600s \
+    --set-env-vars=PGHOST=35.200.196.113,PGPORT=5432,PGDATABASE=postgres,PGUSER=postgres,SENDER_EMAIL=vendor_aayush@letzryd.com,RECIPIENT_EMAIL=vendor_aayush@letzryd.com \
+    --set-secrets=PGPASSWORD=PGPASSWORD:latest,UBER_ACCESS_TOKEN=UBER_ACCESS_TOKEN:latest,APP_PASSWORD=UBER_APP_PASSWORD:latest
+```
+
+### 3. Setup Cloud Scheduler (Daily 4:00 AM IST)
+```bash
+gcloud scheduler jobs create http uber-daily-sync-scheduler \
+    --location=asia-south1 \
+    --schedule="0 4 * * *" \
+    --time-zone="Asia/Kolkata" \
+    --uri="https://asia-south1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/letzryd-dev-test/jobs/uber-data-pipeline-job:run" \
+    --http-method=POST \
+    --oauth-service-account-email="uber-scheduler-sa@letzryd-dev-test.iam.gserviceaccount.com"
+```
+
+### 4. Trigger Force Run via GCP
+```bash
+# Force run for yesterday
+gcloud run jobs execute uber-data-pipeline-job --region=asia-south1
+
+# Force run for custom date
+gcloud run jobs execute uber-data-pipeline-job --region=asia-south1 --args="--date=2026-08-24"
+```
+
+---
+
+## 👥 Maintainers & Support
+* **Team**: LetzRyd Data Infrastructure Team
+* **Email**: `vendor_aayush@letzryd.com`
