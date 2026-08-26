@@ -16,6 +16,7 @@ from src.db_loader import (
     load_org_csv
 )
 from src.email_service import send_execution_email
+from src.backfill import run_backfill
 
 REPORT_TYPES = [
     "REPORT_TYPE_TRIP_ACTIVITY",
@@ -144,10 +145,46 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     return status == "SUCCESS"
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LetzRyd Uber Data Pipeline Runner")
+    parser = argparse.ArgumentParser(description="LetzRyd Uber Data Pipeline Runner & Backfill CLI")
     parser.add_argument("--date", type=str, help="Target Date to sync (YYYY-MM-DD). Defaults to yesterday.")
+    parser.add_argument("--days", type=int, help="Backfill past N days ending yesterday.")
+    parser.add_argument("--start", type=str, help="Backfill start date (YYYY-MM-DD).")
+    parser.add_argument("--end", type=str, help="Backfill end date (YYYY-MM-DD).")
     args = parser.parse_args()
 
+    ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    now_ist = datetime.datetime.now(ist_tz)
+    yesterday = now_ist.date() - datetime.timedelta(days=1)
+
+    # 1. Date Range Backfill Mode (--start and --end)
+    if args.start or args.end:
+        if not (args.start and args.end):
+            parser.error("Both --start and --end must be provided together when specifying a custom date range.")
+        try:
+            s_date = datetime.datetime.strptime(args.start.strip(), "%Y-%m-%d").date()
+            e_date = datetime.datetime.strptime(args.end.strip(), "%Y-%m-%d").date()
+        except ValueError as ve:
+            parser.error(f"Invalid date format: {ve}. Expected YYYY-MM-DD.")
+        if s_date > e_date:
+            parser.error(f"--start date ({s_date}) cannot be after --end date ({e_date}).")
+        
+        success = run_backfill(s_date, e_date)
+        if not success:
+            sys.exit(1)
+        sys.exit(0)
+
+    # 2. Past N Days Backfill Mode (--days N)
+    if args.days is not None:
+        if args.days <= 0:
+            parser.error(f"--days must be a positive integer >= 1 (received: {args.days}).")
+        s_date = yesterday - datetime.timedelta(days=args.days - 1)
+        e_date = yesterday
+        success = run_backfill(s_date, e_date)
+        if not success:
+            sys.exit(1)
+        sys.exit(0)
+
+    # 3. Single Date or Scheduled Yesterday Mode (--date YYYY-MM-DD or default)
     t_date = None
     if args.date:
         try:
