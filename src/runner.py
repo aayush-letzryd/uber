@@ -1,3 +1,4 @@
+import argparse
 import datetime
 import time
 import uuid
@@ -41,11 +42,11 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
 
-    window_str = f"{target_date} [{start_dt.strftime('%Y-%m-%d %H:%M:%S')} -> {end_dt.strftime('%Y-%m-%d %H:%M:%S')}]"
+    date_display = target_date.strftime("%d %b %Y (%Y-%m-%d)")
 
     print("="*80)
     print(f"[UBER PIPELINE RUNNER] RUN ID: {run_id} | TYPE: {run_type}")
-    print(f"Target Window: {window_str}")
+    print(f"Target Date: {date_display} [{start_dt.strftime('%Y-%m-%d %H:%M:%S')} -> {end_dt.strftime('%Y-%m-%d %H:%M:%S')} IST]")
     print("="*80)
 
     conn = get_connection()
@@ -57,11 +58,10 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
 
     try:
         token = get_access_token()
-        # DYNAMIC DISCOVERY: Automatically finds all cities/organizations
         orgs = get_operating_fleets(token)
         stats["fleets"] = len(orgs)
 
-        print(f"Dynamically discovered {len(orgs)} active fleet organizations across all cities.")
+        print(f"Dynamically discovered {len(orgs)} active fleet organization(s) across all cities.")
 
         for i, org in enumerate(orgs, 1):
             org_uuid = org["id"]
@@ -104,8 +104,8 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     duration = time.time() - start_wall_time
     err_str = "; ".join(error_log) if error_log else None
 
-    # Dispatch email (styled identically to Ola template)
-    email_sent = send_execution_email(run_id, run_type, f"{target_date}", status, stats, duration, err_str)
+    # Dispatch clean email
+    email_sent = send_execution_email(run_id, run_type, target_date, status, stats, duration, err_str)
 
     # Log to DB
     log_execution_finish(
@@ -120,4 +120,9 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     print("="*80)
 
 if __name__ == "__main__":
-    run_pipeline()
+    parser = argparse.ArgumentParser(description="LetzRyd Uber Data Pipeline Runner")
+    parser.add_argument("--date", type=str, help="Target Date to sync (YYYY-MM-DD). Defaults to yesterday.")
+    args = parser.parse_args()
+
+    t_date = datetime.datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else None
+    run_pipeline(target_date=t_date, run_type="MANUAL_CLI" if args.date else "DAILY_SCHEDULED")
