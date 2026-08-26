@@ -1,11 +1,12 @@
 import smtplib
 import base64
-import os
+import html
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
 from email.utils import formataddr
 import datetime
+import time
 from config.settings import SMTP_HOST, SMTP_PORT, SENDER_EMAIL, APP_PASSWORD, RECIPIENT_EMAIL
 
 # Embedded LetzRyd Official Logo (Base64)
@@ -13,22 +14,30 @@ LOGO_BASE64 = """iVBORw0KGgoAAAANSUhEUgAAAwAAAAEzCAYAAACG8GSkAAAQAElEQVR4Aez9C7x
 
 def send_execution_email(run_id, run_type, target_date, status, stats, duration_seconds, error_msg=None):
     """
-    Dispatches a clean, executive operational summary email to vendor_aayush@letzryd.com.
+    Dispatches a clean, executive operational summary email to RECIPIENT_EMAIL.
+    Features:
+    - Proper RFC 2046 MIME structure (multipart/related -> multipart/alternative -> text/plain & text/html).
+    - Status-adaptive color palettes for badges, cards, metric highlights, and headers.
+    - Full HTML escaping of error messages with clean multi-error formatting.
+    - Context-managed SMTP with STARTTLS and retry resilience.
+    - Inclusion of run_id and run_type for operational tracking.
     """
-    now_dt = datetime.datetime.now()
+    now_dt = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
     now_str = now_dt.strftime("%d %b %Y, %I:%M %p IST")
-    
-    # Format target date display
+
     if isinstance(target_date, datetime.date):
         date_display = target_date.strftime("%d %b %Y (%Y-%m-%d)")
     else:
         date_display = str(target_date)
 
-    # Status formatting
     if status == "SUCCESS":
         subject_icon = "✅ [SUCCESS]"
         status_text = "STATUS: SUCCESSFUL"
         status_bg = "#16a34a"
+        title_text = "Uber Statement Ingestion Completed"
+        card_bg = "#f0fdf4"
+        card_border = "#16a34a"
+        metric_num_color = "#16a34a"
         db_status_text = "ACTIVE & COMMITTED"
         db_status_bg = "#dcfce7"
         db_status_color = "#15803d"
@@ -36,6 +45,10 @@ def send_execution_email(run_id, run_type, target_date, status, stats, duration_
         subject_icon = "⚠️ [PARTIAL]"
         status_text = "STATUS: PARTIAL SUCCESS"
         status_bg = "#ca8a04"
+        title_text = "Uber Statement Ingestion Finished (Partial)"
+        card_bg = "#fefce8"
+        card_border = "#ca8a04"
+        metric_num_color = "#ca8a04"
         db_status_text = "PARTIAL INGESTION"
         db_status_bg = "#fef9c3"
         db_status_color = "#854d0e"
@@ -43,11 +56,15 @@ def send_execution_email(run_id, run_type, target_date, status, stats, duration_
         subject_icon = "❌ [FAILED]"
         status_text = "STATUS: FAILED"
         status_bg = "#dc2626"
+        title_text = "Uber Statement Ingestion Failed"
+        card_bg = "#fef2f2"
+        card_border = "#dc2626"
+        metric_num_color = "#dc2626"
         db_status_text = "FAILED"
         db_status_bg = "#fee2e2"
         db_status_color = "#991b1b"
 
-    subject = f"{subject_icon} LetzRyd Uber Statement Ingested ({date_display})"
+    subject = f"{subject_icon} LetzRyd Uber Statement [{run_type}] ({date_display})"
 
     trips_cnt = f"{stats.get('trips', 0):,} entries"
     txns_cnt = f"{stats.get('transactions', 0):,} entries"
@@ -56,7 +73,43 @@ def send_execution_email(run_id, run_type, target_date, status, stats, duration_
     fleets_cnt = f"{stats.get('fleets', 0)} fleets"
     duration_str = f"{duration_seconds:.1f} seconds"
 
-    html = f"""<!DOCTYPE html>
+    error_html = ""
+    error_plain = ""
+    if error_msg:
+        errors = [err.strip() for err in str(error_msg).split(";") if err.strip()]
+        error_items = "".join([f"<li style='margin-bottom: 4px;'>{html.escape(e)}</li>" for e in errors])
+        error_html = f"""
+        <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; border-radius: 6px; padding: 12px 16px; margin-top: 18px; color: #991b1b; font-size: 12px;">
+            <strong>Errors Encountered ({len(errors)}):</strong>
+            <ul style="margin: 6px 0 0 0; padding-left: 20px;">
+                {error_items}
+            </ul>
+        </div>
+        """
+        error_plain = f"\nErrors Encountered:\n" + "\n".join([f"- {e}" for e in errors])
+
+    plain_text = f"""LETZRYD UBER DATA PIPELINE EXECUTION SUMMARY
+============================================================
+Status:            {status_text}
+Run ID:            {run_id}
+Run Type:          {run_type}
+Target Window:     {date_display}
+Execution Time:    {now_str}
+Duration:          {duration_str}
+
+METRICS SUMMARY:
+- Trips Ingested:             {trips_cnt}
+- Transactions Ingested:      {txns_cnt}
+- Driver Payments Ingested:   {drivers_cnt}
+- Org Payments Ingested:      {orgs_cnt}
+- Operating Fleets Synced:    {fleets_cnt}
+- Database Status:            {db_status_text}
+{error_plain}
+============================================================
+LetzRyd Mobility Private Limited • Fleet Financial Operations
+"""
+
+    html_content = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -87,14 +140,14 @@ def send_execution_email(run_id, run_type, target_date, status, stats, duration_
 
             <!-- Title & Subtitle -->
             <h1 style="font-size: 20px; font-weight: 800; color: #0f172a; margin: 0 0 4px 0;">
-                Uber Statement Ingestion Completed
+                {title_text}
             </h1>
             <p style="font-size: 13px; color: #64748b; margin: 0 0 20px 0;">
-                Summary of yesterday's ingested data across all active fleet tables.
+                Ingestion summary across all active supplier fleet tables ({run_type}).
             </p>
 
             <!-- Metrics Card -->
-            <div style="background-color: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 8px; padding: 18px 20px;">
+            <div style="background-color: {card_bg}; border-left: 4px solid {card_border}; border-radius: 8px; padding: 18px 20px;">
                 <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
                     <tr>
                         <td style="padding: 6px 0; color: #475569; width: 55%; font-weight: 600;">Target Date:</td>
@@ -102,19 +155,19 @@ def send_execution_email(run_id, run_type, target_date, status, stats, duration_
                     </tr>
                     <tr>
                         <td style="padding: 6px 0; color: #475569; font-weight: 600;">uber_pipeline_trips:</td>
-                        <td style="padding: 6px 0; color: #16a34a; font-weight: 800;">{trips_cnt}</td>
+                        <td style="padding: 6px 0; color: {metric_num_color}; font-weight: 800;">{trips_cnt}</td>
                     </tr>
                     <tr>
                         <td style="padding: 6px 0; color: #475569; font-weight: 600;">uber_pipeline_order_transactions:</td>
-                        <td style="padding: 6px 0; color: #16a34a; font-weight: 800;">{txns_cnt}</td>
+                        <td style="padding: 6px 0; color: {metric_num_color}; font-weight: 800;">{txns_cnt}</td>
                     </tr>
                     <tr>
                         <td style="padding: 6px 0; color: #475569; font-weight: 600;">uber_pipeline_driver_payments:</td>
-                        <td style="padding: 6px 0; color: #16a34a; font-weight: 800;">{drivers_cnt}</td>
+                        <td style="padding: 6px 0; color: {metric_num_color}; font-weight: 800;">{drivers_cnt}</td>
                     </tr>
                     <tr>
                         <td style="padding: 6px 0; color: #475569; font-weight: 600;">uber_pipeline_org_payments:</td>
-                        <td style="padding: 6px 0; color: #16a34a; font-weight: 800;">{orgs_cnt}</td>
+                        <td style="padding: 6px 0; color: {metric_num_color}; font-weight: 800;">{orgs_cnt}</td>
                     </tr>
                     <tr>
                         <td style="padding: 6px 0; color: #475569; font-weight: 600;">Operating Fleets Synced:</td>
@@ -135,17 +188,20 @@ def send_execution_email(run_id, run_type, target_date, status, stats, duration_
                 </table>
             </div>
 
-            {f"<div style='background-color: #fef2f2; border-left: 4px solid #ef4444; border-radius: 6px; padding: 12px 16px; margin-top: 18px; color: #991b1b; font-size: 12px;'><strong>Error:</strong> {error_msg}</div>" if error_msg else ""}
+            {error_html}
 
         </div>
 
-        <!-- Clean Footer -->
+        <!-- Clean Footer with Run ID & Run Type -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 20px; text-align: center;">
             <div style="font-size: 12px; font-weight: 700; color: #334155;">
                 LetzRyd Mobility Private Limited
             </div>
             <div style="font-size: 11px; color: #64748b; margin-top: 2px;">
                 Fleet Financial Operations • {now_str}
+            </div>
+            <div style="font-size: 10px; color: #94a3b8; margin-top: 4px; font-family: monospace;">
+                Run ID: {run_id} | Mode: {run_type}
             </div>
         </div>
 
@@ -161,44 +217,32 @@ def send_execution_email(run_id, run_type, target_date, status, stats, duration_
 
     alt = MIMEMultipart("alternative")
     msg.attach(alt)
-    alt.attach(MIMEText(html, "html"))
 
-    # Attach embedded inline logo
+    alt.attach(MIMEText(plain_text, "plain", "utf-8"))
+    alt.attach(MIMEText(html_content, "html", "utf-8"))
+
     try:
         raw_logo = base64.b64decode(LOGO_BASE64)
-        img = MIMEImage(raw_logo, "png")
+        img = MIMEImage(raw_logo, _subtype="png")
         img.add_header("Content-ID", "<letzryd_logo>")
         img.add_header("Content-Disposition", "inline", filename="letzryd_logo.png")
         msg.attach(img)
     except Exception as e:
         print(f"Warning: Could not attach inline logo: {e}")
 
-    try:
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20)
-        server.starttls()
-        server.login(SENDER_EMAIL, APP_PASSWORD.replace(" ", ""))
-        server.sendmail(SENDER_EMAIL, [RECIPIENT_EMAIL], msg.as_string())
-        server.quit()
-        print(f"[EMAIL SERVICE] Clean executive email with official logo delivered to {RECIPIENT_EMAIL}!")
-        return True
-    except Exception as e:
-        print(f"[EMAIL SERVICE ERROR] Email delivery failed: {e}")
-        return False
+    app_pwd = (APP_PASSWORD or "").replace(" ", "")
+    max_retries = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+                server.starttls()
+                server.login(SENDER_EMAIL, app_pwd)
+                server.sendmail(SENDER_EMAIL, [RECIPIENT_EMAIL], msg.as_string())
+            print(f"[EMAIL SERVICE] Executive email delivered to {RECIPIENT_EMAIL} (attempt {attempt})!")
+            return True
+        except Exception as e:
+            print(f"[EMAIL SERVICE ERROR] Attempt {attempt} failed: {e}")
+            if attempt < max_retries:
+                time.sleep(3)
 
-if __name__ == "__main__":
-    # Test send with single date
-    test_stats = {
-        "trips": 12975,
-        "transactions": 11679,
-        "drivers": 710,
-        "orgs": 10,
-        "fleets": 3
-    }
-    send_execution_email(
-        run_id="run_20260826_040000_a1b2c3",
-        run_type="DAILY_SCHEDULED",
-        target_date=datetime.date(2026, 8, 25),
-        status="SUCCESS",
-        stats=test_stats,
-        duration_seconds=486.6
-    )
+    return False

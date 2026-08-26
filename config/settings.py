@@ -7,17 +7,21 @@ load_dotenv()
 UBER_CLIENT_ID = os.getenv("UBER_CLIENT_ID")
 UBER_CLIENT_SECRET = os.getenv("UBER_CLIENT_SECRET")
 UBER_ACCESS_TOKEN = os.getenv("UBER_ACCESS_TOKEN")
-BASE_API_URL = "https://api.uber.com/v1/vehicle-suppliers"
+BASE_API_URL = os.getenv("UBER_BASE_API_URL", "https://api.uber.com/v1/vehicle-suppliers").rstrip("/")
 
 # Dynamic Fleet Discovery Mode:
 AUTO_DISCOVER_ALL_FLEETS = os.getenv("AUTO_DISCOVER_ALL_FLEETS", "false").lower() in ("true", "1", "yes")
 
-# Default Target Fleets
-DEFAULT_FLEETS = [
-    "SAMVREEDDHI MOBILITY Pvt. Ltd. BLR P",
-    "Samvreeddhi Mobility Pvt Ltd HYD P",
-    "Samvreeddhi Mobility Pvt. Ltd. MUM P",
-]
+# Default Target Fleets (Configurable via env var DEFAULT_FLEETS as comma-separated list)
+_raw_default_fleets = os.getenv("DEFAULT_FLEETS")
+if _raw_default_fleets:
+    DEFAULT_FLEETS = [f.strip() for f in _raw_default_fleets.split(",") if f.strip()]
+else:
+    DEFAULT_FLEETS = [
+        "SAMVREEDDHI MOBILITY Pvt. Ltd. BLR P",
+        "Samvreeddhi Mobility Pvt Ltd HYD P",
+        "Samvreeddhi Mobility Pvt. Ltd. MUM P",
+    ]
 
 # Database Configuration (read exclusively from environment variables / Secret Manager)
 DB_CONFIG = {

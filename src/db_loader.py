@@ -1,7 +1,9 @@
 import os
 import io
 import re
+import math
 import zipfile
+import datetime
 import psycopg2
 from psycopg2.extras import execute_values
 import pandas as pd
@@ -25,6 +27,7 @@ DRIVER_COL_MAP = {
     "Total earnings:Other fees:Platform fee": "total_earnings_other_fees_platform_fee",
     "Total earnings : Other fees : Platform fee": "total_earnings_other_fees_platform_fee",
     "Total earnings:Other earnings": "total_earnings_other_earnings",
+    "Total earnings : Other earnings": "total_earnings_other_earnings",
     "Total earnings:Other earnings:Other": "total_earnings_other_earnings_other",
     "Total earnings : Other earnings : Other": "total_earnings_other_earnings_other",
     "Total earnings:Other earnings:Adjustment": "total_earnings_other_earnings_adjustment",
@@ -58,6 +61,8 @@ ORG_COL_MAP = {
     "Total earnings : Taxes": "total_earnings_taxes",
     "Total earnings:Other fees:Platform fee": "total_earnings_other_fees_platform_fee",
     "Total earnings : Other fees : Platform fee": "total_earnings_other_fees_platform_fee",
+    "Total earnings:Other earnings": "total_earnings_other_earnings",
+    "Total earnings : Other earnings": "total_earnings_other_earnings",
     "Total earnings:Other earnings:Other": "total_earnings_other_earnings_other",
     "Total earnings : Other earnings : Other": "total_earnings_other_earnings_other",
     "Total earnings:Other earnings:Adjustment": "total_earnings_other_earnings_adjustment",
@@ -104,31 +109,44 @@ def get_row_val(row, col):
     return val
 
 def safe_float(val):
-    if val is None or pd.isna(val):
+    if val is None or pd.isna(val) or isinstance(val, bool):
         return None
     try:
         if isinstance(val, (int, float)):
-            return float(val)
+            f = float(val)
+            return f if math.isfinite(f) else None
         s = str(val).replace(",", "").strip()
-        if s == "" or s == "-" or s.lower() in ("nan", "none", "null", "nat"):
+        if s == "" or s == "-" or s.lower() in ("nan", "none", "null", "nat", "n/a", "na"):
             return None
-        return float(s)
+        f = float(s)
+        return f if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None
 
 def safe_str(val):
     if val is None or pd.isna(val):
         return None
-    s = str(val).strip()
-    if s == "" or s.lower() in ("nan", "none", "null", "nat"):
+    s = str(val).strip().replace("\x00", "")
+    if s == "" or s.lower() in ("nan", "none", "null", "nat", "<na>"):
         return None
     return s
 
 def safe_ts(val):
     if val is None or pd.isna(val):
         return None
+    if isinstance(val, pd.Timestamp):
+        return val.to_pydatetime()
+    if isinstance(val, datetime.datetime):
+        return val
+    if isinstance(val, datetime.date):
+        return datetime.datetime.combine(val, datetime.time.min)
     try:
-        ts = pd.to_datetime(val)
+        s = str(val).strip()
+        if not s or s.lower() in ("nan", "none", "null", "nat"):
+            return None
+        # Strip trailing timezone name abbreviations like ' IST', ' UTC', ' PST', ' GMT' after numeric offset or timestamp
+        s_cleaned = re.sub(r"\s+[A-Z]{3,4}$", "", s)
+        ts = pd.to_datetime(s_cleaned)
         if pd.isna(ts):
             return None
         return ts.to_pydatetime()
@@ -144,17 +162,27 @@ def read_report_dataframe(filepath_or_bytes, encoding="utf-8"):
     if isinstance(filepath_or_bytes, str):
         if filepath_or_bytes.endswith(".zip") or zipfile.is_zipfile(filepath_or_bytes):
             with zipfile.ZipFile(filepath_or_bytes, "r") as z:
-                csv_files = [f for f in z.namelist() if f.endswith(".csv")]
-                dfs = [pd.read_csv(z.open(f), encoding=encoding, encoding_errors="replace", low_memory=False) for f in csv_files]
+                csv_files = [f for f in z.namelist() if f.lower().endswith(".csv") and not os.path.basename(f).startswith(".")]
+                dfs = []
+                for f in csv_files:
+                    try:
+                        dfs.append(pd.read_csv(z.open(f), encoding=encoding, encoding_errors="replace", low_memory=False, dtype=str))
+                    except pd.errors.EmptyDataError:
+                        continue
                 return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-        return pd.read_csv(filepath_or_bytes, encoding=encoding, encoding_errors="replace", low_memory=False)
+        return pd.read_csv(filepath_or_bytes, encoding=encoding, encoding_errors="replace", low_memory=False, dtype=str)
     elif isinstance(filepath_or_bytes, (bytes, bytearray)):
-        if filepath_or_bytes.startswith(b"PK\x03\x04"):
+        if filepath_or_bytes.startswith(b"PK\x03\x04") or zipfile.is_zipfile(io.BytesIO(filepath_or_bytes)):
             with zipfile.ZipFile(io.BytesIO(filepath_or_bytes)) as z:
-                csv_files = [f for f in z.namelist() if f.endswith(".csv")]
-                dfs = [pd.read_csv(z.open(f), encoding=encoding, encoding_errors="replace", low_memory=False) for f in csv_files]
+                csv_files = [f for f in z.namelist() if f.lower().endswith(".csv") and not os.path.basename(f).startswith(".")]
+                dfs = []
+                for f in csv_files:
+                    try:
+                        dfs.append(pd.read_csv(z.open(f), encoding=encoding, encoding_errors="replace", low_memory=False, dtype=str))
+                    except pd.errors.EmptyDataError:
+                        continue
                 return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-        return pd.read_csv(io.BytesIO(filepath_or_bytes), encoding=encoding, encoding_errors="replace", low_memory=False)
+        return pd.read_csv(io.BytesIO(filepath_or_bytes), encoding=encoding, encoding_errors="replace", low_memory=False, dtype=str)
     elif isinstance(filepath_or_bytes, pd.DataFrame):
         return filepath_or_bytes
     raise ValueError(f"Unsupported payload type: {type(filepath_or_bytes)}")
@@ -170,6 +198,7 @@ def get_connection():
     return conn
 
 def log_execution_start(conn, run_id, run_type, start_dt, end_dt):
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute(f"""
@@ -177,11 +206,15 @@ def log_execution_start(conn, run_id, run_type, start_dt, end_dt):
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, 'RUNNING');
         """, (run_id, run_type, start_dt, end_dt))
         conn.commit()
-        cur.close()
     except Exception as e:
-        conn.rollback()
+        if conn and not conn.closed:
+            conn.rollback()
+    finally:
+        if cur:
+            cur.close()
 
 def log_execution_finish(conn, run_id, status, fleets, trips, txns, drivers, orgs, error_msg, email_sent):
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute(f"""
@@ -198,9 +231,12 @@ def log_execution_finish(conn, run_id, status, fleets, trips, txns, drivers, org
             WHERE run_id = %s;
         """, (status, fleets, trips, txns, drivers, orgs, error_msg, email_sent, run_id))
         conn.commit()
-        cur.close()
     except Exception as e:
-        conn.rollback()
+        if conn and not conn.closed:
+            conn.rollback()
+    finally:
+        if cur:
+            cur.close()
 
 def load_trips_csv(conn, filepath_or_df, org_name, run_id=None, report_id=None, w_start=None, w_end=None):
     df = read_report_dataframe(filepath_or_df)
@@ -212,7 +248,7 @@ def load_trips_csv(conn, filepath_or_df, org_name, run_id=None, report_id=None, 
             continue
         req_time = safe_ts(get_row_val(row, "Trip request time"))
         drop_time = safe_ts(get_row_val(row, "Trip drop-off time"))
-        trip_date = req_time.date() if req_time else None
+        trip_date = req_time.date() if req_time else (w_start.date() if w_start else None)
         driver_name = f"{safe_str(get_row_val(row, 'Driver first name')) or ''} {safe_str(get_row_val(row, 'Driver surname')) or ''}".strip()
         
         rows.append((
@@ -238,11 +274,21 @@ def load_trips_csv(conn, filepath_or_df, org_name, run_id=None, report_id=None, 
                 ) VALUES %s
                 ON CONFLICT (trip_uuid) DO UPDATE SET
                     trip_date                  = EXCLUDED.trip_date,
+                    driver_uuid                = EXCLUDED.driver_uuid,
                     driver_name                = EXCLUDED.driver_name,
+                    vehicle_uuid               = EXCLUDED.vehicle_uuid,
                     car_no                     = EXCLUDED.car_no,
+                    service_type               = EXCLUDED.service_type,
+                    trip_request_time          = EXCLUDED.trip_request_time,
+                    trip_drop_off_time         = EXCLUDED.trip_drop_off_time,
+                    pick_up_address            = EXCLUDED.pick_up_address,
+                    drop_off_address           = EXCLUDED.drop_off_address,
                     trip_distance              = EXCLUDED.trip_distance,
                     trip_status                = EXCLUDED.trip_status,
+                    product_type               = EXCLUDED.product_type,
                     final_rider_fare           = EXCLUDED.final_rider_fare,
+                    payment_type               = EXCLUDED.payment_type,
+                    rider_name                 = EXCLUDED.rider_name,
                     org_name                   = EXCLUDED.org_name,
                     source_report_id           = EXCLUDED.source_report_id,
                     run_id                     = EXCLUDED.run_id,
@@ -252,10 +298,11 @@ def load_trips_csv(conn, filepath_or_df, org_name, run_id=None, report_id=None, 
             """, rows)
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            cur.close()
+            if conn and not conn.closed:
+                conn.rollback()
             raise e
-        cur.close()
+        finally:
+            cur.close()
     print(f"  {TABLE_TRIPS}: {len(rows)} trips upserted ({skipped} skipped)")
     return len(rows)
 
@@ -270,7 +317,7 @@ def load_order_transactions_csv(conn, filepath_or_df, org_name, run_id=None, rep
             skipped += 1
             continue
         rep_time = safe_ts(get_row_val(row, "reporting_time"))
-        trx_date = rep_time.date() if rep_time else None
+        trx_date = rep_time.date() if rep_time else (w_end.date() if w_end else (w_start.date() if w_start else None))
         
         rows.append((
             trx_date, txn_uuid, safe_str(get_row_val(row, "driver_uuid")),
@@ -293,12 +340,21 @@ def load_order_transactions_csv(conn, filepath_or_df, org_name, run_id=None, rep
                     report_fetch_window_start, report_fetch_window_end
                 ) VALUES %s
                 ON CONFLICT (transaction_uuid) DO UPDATE SET
+                    trx_date                   = EXCLUDED.trx_date,
+                    driver_uuid                = EXCLUDED.driver_uuid,
+                    driver_first_name          = EXCLUDED.driver_first_name,
+                    driver_surname             = EXCLUDED.driver_surname,
+                    trip_uuid                  = EXCLUDED.trip_uuid,
                     description                = EXCLUDED.description,
+                    organisation_name          = EXCLUDED.organisation_name,
+                    org_alias                  = EXCLUDED.org_alias,
+                    reporting_time             = EXCLUDED.reporting_time,
                     paid_to_you                = EXCLUDED.paid_to_you,
                     actual_earnings            = EXCLUDED.actual_earnings,
                     cash_collected             = EXCLUDED.cash_collected,
                     refunds_toll               = EXCLUDED.refunds_toll,
                     vehicle_number             = EXCLUDED.vehicle_number,
+                    org_name                   = EXCLUDED.org_name,
                     source_report_id           = EXCLUDED.source_report_id,
                     run_id                     = EXCLUDED.run_id,
                     report_fetch_window_start  = EXCLUDED.report_fetch_window_start,
@@ -307,10 +363,11 @@ def load_order_transactions_csv(conn, filepath_or_df, org_name, run_id=None, rep
             """, rows)
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            cur.close()
+            if conn and not conn.closed:
+                conn.rollback()
             raise e
-        cur.close()
+        finally:
+            cur.close()
     print(f"  {TABLE_TRANSACTIONS}: {len(rows)} transactions upserted ({skipped} skipped)")
     return len(rows)
 
@@ -359,19 +416,40 @@ def load_driver_csv(conn, filepath_or_df, window_start, window_end, org_name, ru
                 ) VALUES %s
                 ON CONFLICT (driver_uuid, org_name, report_fetch_window_start, report_fetch_window_end)
                 DO UPDATE SET
-                    total_earnings             = EXCLUDED.total_earnings,
-                    total_earnings_net_fare    = EXCLUDED.total_earnings_net_fare,
-                    payouts_cash_collected     = EXCLUDED.payouts_cash_collected,
-                    source_report_id           = EXCLUDED.source_report_id,
-                    run_id                     = EXCLUDED.run_id,
-                    ingested_at                = CURRENT_TIMESTAMP;
+                    driver_first_name                                    = EXCLUDED.driver_first_name,
+                    driver_surname                                       = EXCLUDED.driver_surname,
+                    total_earnings                                       = EXCLUDED.total_earnings,
+                    total_earnings_net_fare                              = EXCLUDED.total_earnings_net_fare,
+                    total_earnings_promotions                            = EXCLUDED.total_earnings_promotions,
+                    total_earnings_tip                                   = EXCLUDED.total_earnings_tip,
+                    total_earnings_taxes                                 = EXCLUDED.total_earnings_taxes,
+                    total_earnings_other_fees_platform_fee               = EXCLUDED.total_earnings_other_fees_platform_fee,
+                    total_earnings_other_earnings                        = EXCLUDED.total_earnings_other_earnings,
+                    total_earnings_other_earnings_other                  = EXCLUDED.total_earnings_other_earnings_other,
+                    total_earnings_other_earnings_adjustment             = EXCLUDED.total_earnings_other_earnings_adjustment,
+                    refunds_expenses                                     = EXCLUDED.refunds_expenses,
+                    refunds_expenses_taxes_tax                           = EXCLUDED.refunds_expenses_taxes_tax,
+                    refunds_expenses_expenses_driver_subscription_charge = EXCLUDED.refunds_expenses_expenses_driver_subscription_charge,
+                    refunds_expenses_refunds_toll                        = EXCLUDED.refunds_expenses_refunds_toll,
+                    payouts                                              = EXCLUDED.payouts,
+                    payouts_transferred_to_bank_account                  = EXCLUDED.payouts_transferred_to_bank_account,
+                    payouts_cash_collected                               = EXCLUDED.payouts_cash_collected,
+                    paid_to_third_parties                                = EXCLUDED.paid_to_third_parties,
+                    paid_to_third_parties_paid_to_airport                = EXCLUDED.paid_to_third_parties_paid_to_airport,
+                    paid_to_third_parties_railway_pickup_fee             = EXCLUDED.paid_to_third_parties_railway_pickup_fee,
+                    paid_to_uber                                         = EXCLUDED.paid_to_uber,
+                    paid_to_uber_booking_fee                             = EXCLUDED.paid_to_uber_booking_fee,
+                    source_report_id                                     = EXCLUDED.source_report_id,
+                    run_id                                               = EXCLUDED.run_id,
+                    ingested_at                                          = CURRENT_TIMESTAMP;
             """, rows)
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            cur.close()
+            if conn and not conn.closed:
+                conn.rollback()
             raise e
-        cur.close()
+        finally:
+            cur.close()
     print(f"  {TABLE_DRIVER_PAYMENTS}: {len(rows)} drivers upserted ({skipped} skipped)")
     return len(rows)
 
@@ -392,6 +470,7 @@ def load_org_csv(conn, filepath_or_df, window_start, window_end, run_id=None, re
             safe_float(get_row_val(row, "total_earnings")), safe_float(get_row_val(row, "total_earnings_net_fare")),
             safe_float(get_row_val(row, "total_earnings_promotions")), safe_float(get_row_val(row, "total_earnings_tip")),
             safe_float(get_row_val(row, "total_earnings_taxes")), safe_float(get_row_val(row, "total_earnings_other_fees_platform_fee")),
+            safe_float(get_row_val(row, "total_earnings_other_earnings")),
             safe_float(get_row_val(row, "total_earnings_other_earnings_other")), safe_float(get_row_val(row, "total_earnings_other_earnings_adjustment")),
             safe_float(get_row_val(row, "refunds_expenses")), safe_float(get_row_val(row, "refunds_expenses_taxes_tax")),
             safe_float(get_row_val(row, "refunds_expenses_expenses_driver_subscription_charge")),
@@ -411,6 +490,7 @@ def load_org_csv(conn, filepath_or_df, window_start, window_end, run_id=None, re
                     start_of_period_balance, end_of_period_balance,
                     total_earnings, total_earnings_net_fare, total_earnings_promotions,
                     total_earnings_tip, total_earnings_taxes, total_earnings_other_fees_platform_fee,
+                    total_earnings_other_earnings,
                     total_earnings_other_earnings_other, total_earnings_other_earnings_adjustment,
                     refunds_expenses, refunds_expenses_taxes_tax,
                     refunds_expenses_expenses_driver_subscription_charge,
@@ -424,18 +504,43 @@ def load_org_csv(conn, filepath_or_df, window_start, window_end, run_id=None, re
                 ) VALUES %s
                 ON CONFLICT (organization_uuid, report_fetch_window_start, report_fetch_window_end)
                 DO UPDATE SET
-                    total_earnings         = EXCLUDED.total_earnings,
-                    total_earnings_net_fare= EXCLUDED.total_earnings_net_fare,
-                    payouts_cash_collected = EXCLUDED.payouts_cash_collected,
-                    source_report_id       = EXCLUDED.source_report_id,
-                    run_id                 = EXCLUDED.run_id,
-                    ingested_at            = CURRENT_TIMESTAMP;
+                    organisation_name                                    = EXCLUDED.organisation_name,
+                    org_alias                                            = EXCLUDED.org_alias,
+                    driver_first_name                                    = EXCLUDED.driver_first_name,
+                    driver_surname                                       = EXCLUDED.driver_surname,
+                    start_of_period_balance                              = EXCLUDED.start_of_period_balance,
+                    end_of_period_balance                                = EXCLUDED.end_of_period_balance,
+                    total_earnings                                       = EXCLUDED.total_earnings,
+                    total_earnings_net_fare                              = EXCLUDED.total_earnings_net_fare,
+                    total_earnings_promotions                            = EXCLUDED.total_earnings_promotions,
+                    total_earnings_tip                                   = EXCLUDED.total_earnings_tip,
+                    total_earnings_taxes                                 = EXCLUDED.total_earnings_taxes,
+                    total_earnings_other_fees_platform_fee               = EXCLUDED.total_earnings_other_fees_platform_fee,
+                    total_earnings_other_earnings                        = EXCLUDED.total_earnings_other_earnings,
+                    total_earnings_other_earnings_other                  = EXCLUDED.total_earnings_other_earnings_other,
+                    total_earnings_other_earnings_adjustment             = EXCLUDED.total_earnings_other_earnings_adjustment,
+                    refunds_expenses                                     = EXCLUDED.refunds_expenses,
+                    refunds_expenses_taxes_tax                           = EXCLUDED.refunds_expenses_taxes_tax,
+                    refunds_expenses_expenses_driver_subscription_charge = EXCLUDED.refunds_expenses_expenses_driver_subscription_charge,
+                    refunds_expenses_refunds_toll                        = EXCLUDED.refunds_expenses_refunds_toll,
+                    payouts                                              = EXCLUDED.payouts,
+                    payouts_cash_collected                               = EXCLUDED.payouts_cash_collected,
+                    payouts_transferred_to_bank_account                  = EXCLUDED.payouts_transferred_to_bank_account,
+                    paid_to_third_parties                                = EXCLUDED.paid_to_third_parties,
+                    paid_to_third_parties_paid_to_airport                = EXCLUDED.paid_to_third_parties_paid_to_airport,
+                    paid_to_third_parties_railway_pickup_fee             = EXCLUDED.paid_to_third_parties_railway_pickup_fee,
+                    paid_to_uber                                         = EXCLUDED.paid_to_uber,
+                    paid_to_uber_booking_fee                             = EXCLUDED.paid_to_uber_booking_fee,
+                    source_report_id                                     = EXCLUDED.source_report_id,
+                    run_id                                               = EXCLUDED.run_id,
+                    ingested_at                                          = CURRENT_TIMESTAMP;
             """, rows)
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            cur.close()
+            if conn and not conn.closed:
+                conn.rollback()
             raise e
-        cur.close()
+        finally:
+            cur.close()
     print(f"  {TABLE_ORG_PAYMENTS}: {len(rows)} org rows upserted ({skipped} skipped)")
     return len(rows)

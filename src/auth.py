@@ -22,7 +22,7 @@ _TOKEN_CACHE = {
 def get_access_token(force_refresh=False):
     """
     Acquires an OAuth 2.0 Bearer access token using client_credentials grant.
-    Maintains an in-memory cache and automatically refreshes when near expiration.
+    Maintains an in-memory cache and automatically refreshes when within 300 seconds of expiration.
     """
     now = time.time()
     
