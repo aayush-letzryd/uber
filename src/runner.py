@@ -2,7 +2,7 @@ import datetime
 import time
 import uuid
 from src.auth import get_access_token
-from src.get_orgs import get_all_organizations
+from src.get_orgs import get_operating_fleets
 from src.fetch_reports import get_or_generate_report, wait_for_report, download_report
 from src.db_loader import (
     get_connection,
@@ -14,7 +14,6 @@ from src.db_loader import (
     load_org_csv
 )
 from src.email_service import send_execution_email
-from config.settings import TARGET_ORG_NAMES
 
 REPORT_TYPES = [
     "REPORT_TYPE_TRIP_ACTIVITY",
@@ -26,6 +25,7 @@ REPORT_TYPES = [
 def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     """
     Executes an idempotent ingestion run for target_date (defaults to yesterday in IST).
+    Dynamically discovers all operating cities/fleets so new cities work automatically.
     Safe to trigger randomly at any hour (force run) without breaking data.
     """
     ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -57,16 +57,16 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
 
     try:
         token = get_access_token()
-        all_orgs = get_all_organizations(token)
-        orgs = [o for o in all_orgs if o.get("name") in TARGET_ORG_NAMES]
+        # DYNAMIC DISCOVERY: Automatically finds all cities/organizations
+        orgs = get_operating_fleets(token)
         stats["fleets"] = len(orgs)
 
-        print(f"Found {len(orgs)} target operating fleets to ingest.")
+        print(f"Dynamically discovered {len(orgs)} active fleet organizations across all cities.")
 
-        for org in orgs:
+        for i, org in enumerate(orgs, 1):
             org_uuid = org["id"]
             org_name = org.get("name")
-            print(f"\n>>> Operating Fleet: {org_name}")
+            print(f"\n[{i}/{len(orgs)}] Operating Fleet: {org_name}")
 
             for report_type in REPORT_TYPES:
                 print(f"  * Fetching {report_type}...")
@@ -94,7 +94,7 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
                     error_log.append(err_msg)
                     status = "PARTIAL"
 
-                time.sleep(3)
+                time.sleep(2)
 
     except Exception as e:
         status = "FAILED"
@@ -104,8 +104,8 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     duration = time.time() - start_wall_time
     err_str = "; ".join(error_log) if error_log else None
 
-    # Dispatch email
-    email_sent = send_execution_email(run_id, run_type, window_str, status, stats, duration, err_str)
+    # Dispatch email (styled identically to Ola template)
+    email_sent = send_execution_email(run_id, run_type, f"{target_date}", status, stats, duration, err_str)
 
     # Log to DB
     log_execution_finish(

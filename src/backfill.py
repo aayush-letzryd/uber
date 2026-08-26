@@ -3,7 +3,7 @@ import datetime
 import time
 import uuid
 from src.auth import get_access_token
-from src.get_orgs import get_all_organizations
+from src.get_orgs import get_operating_fleets
 from src.fetch_reports import get_or_generate_report, wait_for_report, download_report
 from src.db_loader import (
     get_connection,
@@ -15,7 +15,6 @@ from src.db_loader import (
     load_org_csv
 )
 from src.email_service import send_execution_email
-from config.settings import TARGET_ORG_NAMES
 
 REPORT_TYPES = [
     "REPORT_TYPE_TRIP_ACTIVITY",
@@ -54,15 +53,17 @@ def run_backfill(start_date, end_date):
 
     try:
         token = get_access_token()
-        all_orgs = get_all_organizations(token)
-        orgs = [o for o in all_orgs if o.get("name") in TARGET_ORG_NAMES]
+        # DYNAMIC DISCOVERY: Discovers all operating cities/fleets
+        orgs = get_operating_fleets(token)
         stats["fleets"] = len(orgs)
 
-        for org in orgs:
+        print(f"Found {len(orgs)} active supplier fleet(s) across all cities.")
+
+        for i, org in enumerate(orgs, 1):
             org_uuid = org["id"]
             org_name = org.get("name")
             print(f"\n========================================================")
-            print(f"BACKFILLING FLEET: {org_name}")
+            print(f"[{i}/{len(orgs)}] BACKFILLING FLEET: {org_name}")
             print(f"========================================================")
 
             for report_type in REPORT_TYPES:
@@ -100,7 +101,7 @@ def run_backfill(start_date, end_date):
                         status = "PARTIAL"
                         break
 
-                    time.sleep(3)
+                    time.sleep(2)
 
     except Exception as e:
         status = "FAILED"

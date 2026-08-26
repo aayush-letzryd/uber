@@ -9,11 +9,16 @@ UBER_CLIENT_SECRET = os.getenv("UBER_CLIENT_SECRET")
 UBER_ACCESS_TOKEN = os.getenv("UBER_ACCESS_TOKEN", "IA.AQAAAAdDXrzL0DywPZz876sBoFENZcHr18P9VEtw3JvhfqQEXpWlsLF4G3We3YAOpWePo-Nfuj69e_ERZYxTXtWmKBZnn1Kl_gATsn20lG9wldEQHepuUTwrtVe0sXyoI3Fp79dv1IP6Lx0KCikfs-COmJSur7D5-xuQFCOr7xnxrw")
 BASE_API_URL = "https://api.uber.com/v1/vehicle-suppliers"
 
-# Target Operating Fleets
-TARGET_ORG_NAMES = [
-    "SAMVREEDDHI MOBILITY Pvt. Ltd. BLR P",
-    "Samvreeddhi Mobility Pvt Ltd HYD P",
-    "Samvreeddhi Mobility Pvt. Ltd. MUM P",
+# Dynamic Fleet Discovery Mode:
+# When set to True or empty list, the pipeline automatically fetches ALL organizations/cities
+# associated with the account via the Uber API.
+AUTO_DISCOVER_ALL_FLEETS = os.getenv("AUTO_DISCOVER_ALL_FLEETS", "true").lower() in ("true", "1", "yes")
+
+# Optional whitelist (if filtering is specifically desired, otherwise empty to discover all)
+FLEET_NAME_WHITELIST = [
+    # "SAMVREEDDHI MOBILITY Pvt. Ltd. BLR P",
+    # "Samvreeddhi Mobility Pvt Ltd HYD P",
+    # "Samvreeddhi Mobility Pvt. Ltd. MUM P",
 ]
 
 # Database Configuration
