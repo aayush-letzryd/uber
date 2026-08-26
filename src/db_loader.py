@@ -227,29 +227,34 @@ def load_trips_csv(conn, filepath_or_df, org_name, run_id=None, report_id=None, 
         ))
     if rows:
         cur = conn.cursor()
-        execute_values(cur, f"""
-            INSERT INTO {TABLE_TRIPS} (
-                trip_date, trip_uuid, driver_uuid, driver_name, vehicle_uuid, car_no,
-                service_type, trip_request_time, trip_drop_off_time, pick_up_address,
-                drop_off_address, trip_distance, trip_status, product_type,
-                final_rider_fare, payment_type, rider_name, org_name,
-                source_report_id, run_id, report_fetch_window_start, report_fetch_window_end, ingested_at
-            ) VALUES %s
-            ON CONFLICT (trip_uuid) DO UPDATE SET
-                trip_date                  = EXCLUDED.trip_date,
-                driver_name                = EXCLUDED.driver_name,
-                car_no                     = EXCLUDED.car_no,
-                trip_distance              = EXCLUDED.trip_distance,
-                trip_status                = EXCLUDED.trip_status,
-                final_rider_fare           = EXCLUDED.final_rider_fare,
-                org_name                   = EXCLUDED.org_name,
-                source_report_id           = EXCLUDED.source_report_id,
-                run_id                     = EXCLUDED.run_id,
-                report_fetch_window_start  = EXCLUDED.report_fetch_window_start,
-                report_fetch_window_end    = EXCLUDED.report_fetch_window_end,
-                ingested_at                = CURRENT_TIMESTAMP;
-        """, rows)
-        conn.commit()
+        try:
+            execute_values(cur, f"""
+                INSERT INTO {TABLE_TRIPS} (
+                    trip_date, trip_uuid, driver_uuid, driver_name, vehicle_uuid, car_no,
+                    service_type, trip_request_time, trip_drop_off_time, pick_up_address,
+                    drop_off_address, trip_distance, trip_status, product_type,
+                    final_rider_fare, payment_type, rider_name, org_name,
+                    source_report_id, run_id, report_fetch_window_start, report_fetch_window_end
+                ) VALUES %s
+                ON CONFLICT (trip_uuid) DO UPDATE SET
+                    trip_date                  = EXCLUDED.trip_date,
+                    driver_name                = EXCLUDED.driver_name,
+                    car_no                     = EXCLUDED.car_no,
+                    trip_distance              = EXCLUDED.trip_distance,
+                    trip_status                = EXCLUDED.trip_status,
+                    final_rider_fare           = EXCLUDED.final_rider_fare,
+                    org_name                   = EXCLUDED.org_name,
+                    source_report_id           = EXCLUDED.source_report_id,
+                    run_id                     = EXCLUDED.run_id,
+                    report_fetch_window_start  = EXCLUDED.report_fetch_window_start,
+                    report_fetch_window_end    = EXCLUDED.report_fetch_window_end,
+                    ingested_at                = CURRENT_TIMESTAMP;
+            """, rows)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            cur.close()
+            raise e
         cur.close()
     print(f"  {TABLE_TRIPS}: {len(rows)} trips upserted ({skipped} skipped)")
     return len(rows)
@@ -278,28 +283,33 @@ def load_order_transactions_csv(conn, filepath_or_df, org_name, run_id=None, rep
         ))
     if rows:
         cur = conn.cursor()
-        execute_values(cur, f"""
-            INSERT INTO {TABLE_TRANSACTIONS} (
-                trx_date, transaction_uuid, driver_uuid, driver_first_name, driver_surname,
-                trip_uuid, description, organisation_name, org_alias, reporting_time,
-                paid_to_you, actual_earnings, cash_collected, refunds_toll,
-                vehicle_number, org_name, source_report_id, run_id,
-                report_fetch_window_start, report_fetch_window_end, ingested_at
-            ) VALUES %s
-            ON CONFLICT (transaction_uuid) DO UPDATE SET
-                description                = EXCLUDED.description,
-                paid_to_you                = EXCLUDED.paid_to_you,
-                actual_earnings            = EXCLUDED.actual_earnings,
-                cash_collected             = EXCLUDED.cash_collected,
-                refunds_toll               = EXCLUDED.refunds_toll,
-                vehicle_number             = EXCLUDED.vehicle_number,
-                source_report_id           = EXCLUDED.source_report_id,
-                run_id                     = EXCLUDED.run_id,
-                report_fetch_window_start  = EXCLUDED.report_fetch_window_start,
-                report_fetch_window_end    = EXCLUDED.report_fetch_window_end,
-                ingested_at                = CURRENT_TIMESTAMP;
-        """, rows)
-        conn.commit()
+        try:
+            execute_values(cur, f"""
+                INSERT INTO {TABLE_TRANSACTIONS} (
+                    trx_date, transaction_uuid, driver_uuid, driver_first_name, driver_surname,
+                    trip_uuid, description, organisation_name, org_alias, reporting_time,
+                    paid_to_you, actual_earnings, cash_collected, refunds_toll,
+                    vehicle_number, org_name, source_report_id, run_id,
+                    report_fetch_window_start, report_fetch_window_end
+                ) VALUES %s
+                ON CONFLICT (transaction_uuid) DO UPDATE SET
+                    description                = EXCLUDED.description,
+                    paid_to_you                = EXCLUDED.paid_to_you,
+                    actual_earnings            = EXCLUDED.actual_earnings,
+                    cash_collected             = EXCLUDED.cash_collected,
+                    refunds_toll               = EXCLUDED.refunds_toll,
+                    vehicle_number             = EXCLUDED.vehicle_number,
+                    source_report_id           = EXCLUDED.source_report_id,
+                    run_id                     = EXCLUDED.run_id,
+                    report_fetch_window_start  = EXCLUDED.report_fetch_window_start,
+                    report_fetch_window_end    = EXCLUDED.report_fetch_window_end,
+                    ingested_at                = CURRENT_TIMESTAMP;
+            """, rows)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            cur.close()
+            raise e
         cur.close()
     print(f"  {TABLE_TRANSACTIONS}: {len(rows)} transactions upserted ({skipped} skipped)")
     return len(rows)
@@ -330,32 +340,37 @@ def load_driver_csv(conn, filepath_or_df, window_start, window_end, org_name, ru
         ))
     if rows:
         cur = conn.cursor()
-        execute_values(cur, f"""
-            INSERT INTO {TABLE_DRIVER_PAYMENTS} (
-                driver_uuid, driver_first_name, driver_surname,
-                total_earnings, total_earnings_net_fare, total_earnings_promotions,
-                total_earnings_tip, total_earnings_taxes, total_earnings_other_fees_platform_fee,
-                total_earnings_other_earnings, total_earnings_other_earnings_other, total_earnings_other_earnings_adjustment,
-                refunds_expenses, refunds_expenses_taxes_tax,
-                refunds_expenses_expenses_driver_subscription_charge,
-                refunds_expenses_refunds_toll, payouts,
-                payouts_transferred_to_bank_account, payouts_cash_collected,
-                paid_to_third_parties, paid_to_third_parties_paid_to_airport,
-                paid_to_third_parties_railway_pickup_fee,
-                paid_to_uber, paid_to_uber_booking_fee,
-                org_name, source_report_id, run_id,
-                report_fetch_window_start, report_fetch_window_end, ingested_at
-            ) VALUES %s
-            ON CONFLICT (driver_uuid, org_name, report_fetch_window_start, report_fetch_window_end)
-            DO UPDATE SET
-                total_earnings             = EXCLUDED.total_earnings,
-                total_earnings_net_fare    = EXCLUDED.total_earnings_net_fare,
-                payouts_cash_collected     = EXCLUDED.payouts_cash_collected,
-                source_report_id           = EXCLUDED.source_report_id,
-                run_id                     = EXCLUDED.run_id,
-                ingested_at                = CURRENT_TIMESTAMP;
-        """, rows)
-        conn.commit()
+        try:
+            execute_values(cur, f"""
+                INSERT INTO {TABLE_DRIVER_PAYMENTS} (
+                    driver_uuid, driver_first_name, driver_surname,
+                    total_earnings, total_earnings_net_fare, total_earnings_promotions,
+                    total_earnings_tip, total_earnings_taxes, total_earnings_other_fees_platform_fee,
+                    total_earnings_other_earnings, total_earnings_other_earnings_other, total_earnings_other_earnings_adjustment,
+                    refunds_expenses, refunds_expenses_taxes_tax,
+                    refunds_expenses_expenses_driver_subscription_charge,
+                    refunds_expenses_refunds_toll, payouts,
+                    payouts_transferred_to_bank_account, payouts_cash_collected,
+                    paid_to_third_parties, paid_to_third_parties_paid_to_airport,
+                    paid_to_third_parties_railway_pickup_fee,
+                    paid_to_uber, paid_to_uber_booking_fee,
+                    org_name, source_report_id, run_id,
+                    report_fetch_window_start, report_fetch_window_end
+                ) VALUES %s
+                ON CONFLICT (driver_uuid, org_name, report_fetch_window_start, report_fetch_window_end)
+                DO UPDATE SET
+                    total_earnings             = EXCLUDED.total_earnings,
+                    total_earnings_net_fare    = EXCLUDED.total_earnings_net_fare,
+                    payouts_cash_collected     = EXCLUDED.payouts_cash_collected,
+                    source_report_id           = EXCLUDED.source_report_id,
+                    run_id                     = EXCLUDED.run_id,
+                    ingested_at                = CURRENT_TIMESTAMP;
+            """, rows)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            cur.close()
+            raise e
         cur.close()
     print(f"  {TABLE_DRIVER_PAYMENTS}: {len(rows)} drivers upserted ({skipped} skipped)")
     return len(rows)
@@ -388,34 +403,39 @@ def load_org_csv(conn, filepath_or_df, window_start, window_end, run_id=None, re
         ))
     if rows:
         cur = conn.cursor()
-        execute_values(cur, f"""
-            INSERT INTO {TABLE_ORG_PAYMENTS} (
-                organization_uuid, organisation_name, org_alias,
-                driver_first_name, driver_surname,
-                start_of_period_balance, end_of_period_balance,
-                total_earnings, total_earnings_net_fare, total_earnings_promotions,
-                total_earnings_tip, total_earnings_taxes, total_earnings_other_fees_platform_fee,
-                total_earnings_other_earnings_other, total_earnings_other_earnings_adjustment,
-                refunds_expenses, refunds_expenses_taxes_tax,
-                refunds_expenses_expenses_driver_subscription_charge,
-                refunds_expenses_refunds_toll, payouts,
-                payouts_cash_collected, payouts_transferred_to_bank_account,
-                paid_to_third_parties, paid_to_third_parties_paid_to_airport,
-                paid_to_third_parties_railway_pickup_fee,
-                paid_to_uber, paid_to_uber_booking_fee,
-                source_report_id, run_id,
-                report_fetch_window_start, report_fetch_window_end, ingested_at
-            ) VALUES %s
-            ON CONFLICT (organization_uuid, report_fetch_window_start, report_fetch_window_end)
-            DO UPDATE SET
-                total_earnings         = EXCLUDED.total_earnings,
-                total_earnings_net_fare= EXCLUDED.total_earnings_net_fare,
-                payouts_cash_collected = EXCLUDED.payouts_cash_collected,
-                source_report_id       = EXCLUDED.source_report_id,
-                run_id                 = EXCLUDED.run_id,
-                ingested_at            = CURRENT_TIMESTAMP;
-        """, rows)
-        conn.commit()
+        try:
+            execute_values(cur, f"""
+                INSERT INTO {TABLE_ORG_PAYMENTS} (
+                    organization_uuid, organisation_name, org_alias,
+                    driver_first_name, driver_surname,
+                    start_of_period_balance, end_of_period_balance,
+                    total_earnings, total_earnings_net_fare, total_earnings_promotions,
+                    total_earnings_tip, total_earnings_taxes, total_earnings_other_fees_platform_fee,
+                    total_earnings_other_earnings_other, total_earnings_other_earnings_adjustment,
+                    refunds_expenses, refunds_expenses_taxes_tax,
+                    refunds_expenses_expenses_driver_subscription_charge,
+                    refunds_expenses_refunds_toll, payouts,
+                    payouts_cash_collected, payouts_transferred_to_bank_account,
+                    paid_to_third_parties, paid_to_third_parties_paid_to_airport,
+                    paid_to_third_parties_railway_pickup_fee,
+                    paid_to_uber, paid_to_uber_booking_fee,
+                    source_report_id, run_id,
+                    report_fetch_window_start, report_fetch_window_end
+                ) VALUES %s
+                ON CONFLICT (organization_uuid, report_fetch_window_start, report_fetch_window_end)
+                DO UPDATE SET
+                    total_earnings         = EXCLUDED.total_earnings,
+                    total_earnings_net_fare= EXCLUDED.total_earnings_net_fare,
+                    payouts_cash_collected = EXCLUDED.payouts_cash_collected,
+                    source_report_id       = EXCLUDED.source_report_id,
+                    run_id                 = EXCLUDED.run_id,
+                    ingested_at            = CURRENT_TIMESTAMP;
+            """, rows)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            cur.close()
+            raise e
         cur.close()
     print(f"  {TABLE_ORG_PAYMENTS}: {len(rows)} org rows upserted ({skipped} skipped)")
     return len(rows)
