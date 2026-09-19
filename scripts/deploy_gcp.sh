@@ -29,10 +29,10 @@ gcloud run jobs deploy ${SERVICE_NAME} \
     --set-env-vars=PGHOST=35.200.196.113,PGPORT=5432,PGDATABASE=postgres,PGUSER=postgres,SENDER_EMAIL=vendor_aayush@letzryd.com,RECIPIENT_EMAIL=vendor_aayush@letzryd.com \
     --set-secrets=PGPASSWORD=UBER_PG_PASSWORD:latest,UBER_CLIENT_ID=UBER_CLIENT_ID:latest,UBER_CLIENT_SECRET=UBER_CLIENT_SECRET:latest,APP_PASSWORD=UBER_APP_PASSWORD:latest
 
-echo "4. Setting up Cloud Scheduler Trigger (Daily at 4:00 AM IST - Non-Working Hours)..."
+echo "4. Setting up Cloud Scheduler Trigger (Daily at 5:00 AM IST - Non-Working Hours)..."
 gcloud scheduler jobs create http ${SCHEDULER_JOB_NAME} \
     --location=${REGION} \
-    --schedule="0 4 * * *" \
+    --schedule="0 5 * * *" \
     --time-zone="Asia/Kolkata" \
     --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${SERVICE_NAME}:run" \
     --http-method=POST \
@@ -40,7 +40,7 @@ gcloud scheduler jobs create http ${SCHEDULER_JOB_NAME} \
     --project=${PROJECT_ID} \
     || gcloud scheduler jobs update http ${SCHEDULER_JOB_NAME} \
     --location=${REGION} \
-    --schedule="0 4 * * *" \
+    --schedule="0 5 * * *" \
     --time-zone="Asia/Kolkata" \
     --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${SERVICE_NAME}:run" \
     --http-method=POST \
