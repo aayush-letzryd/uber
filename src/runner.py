@@ -65,24 +65,30 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
         error_log.append(f"DB Init Error: {e}")
 
     try:
-        token = get_access_token()
-        orgs = get_operating_fleets(token)
+        token = None
+        try:
+            token = get_access_token()
+        except Exception as auth_err:
+            print(f"[AUTH WARNING] OAuth token fetch encountered an issue: {auth_err}")
+            error_log.append(f"Auth Token Warning: {auth_err}")
 
-        print(f"Dynamically discovered {len(orgs)} active fleet organization(s) across all cities.")
+        orgs = get_operating_fleets(token)
+        print(f"Targeting {len(orgs)} active fleet organization(s) across operating cities.")
 
         fleets_processed_count = 0
         for i, org in enumerate(orgs, 1):
             org_uuid = org["id"]
-            org_name = org.get("name")
-            print(f"\n[{i}/{len(orgs)}] Operating Fleet: {org_name}")
+            org_name = org.get("name", "Unknown Fleet")
+            print(f"\n[{i}/{len(orgs)}] Operating Fleet: {org_name} (ID: {org_uuid})")
             fleet_has_error = False
 
             for report_type in REPORT_TYPES:
                 print(f"  * Fetching {report_type}...")
                 try:
-                    report_id = get_or_generate_report(token, org_uuid, report_type, start_ms, end_ms)
-                    wait_for_report(token, org_uuid, report_id)
-                    path = download_report(token, org_uuid, report_id, report_type, org_name)
+                    active_token = get_access_token()
+                    report_id = get_or_generate_report(active_token, org_uuid, report_type, start_ms, end_ms)
+                    wait_for_report(active_token, org_uuid, report_id)
+                    path = download_report(active_token, org_uuid, report_id, report_type, org_name)
 
                     if report_type == "REPORT_TYPE_TRIP_ACTIVITY":
                         cnt = load_trips_csv(conn, path, org_name, run_id, report_id, start_dt, end_dt)
@@ -102,9 +108,10 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
                     err_msg = f"{org_name} [{report_type}]: {e}"
                     print(f"    [ERROR] {err_msg}")
                     error_log.append(err_msg)
-                    status = "PARTIAL"
+                    if status != "FAILED":
+                        status = "PARTIAL"
 
-                time.sleep(2)
+                time.sleep(1.5)
 
             if not fleet_has_error:
                 fleets_processed_count += 1

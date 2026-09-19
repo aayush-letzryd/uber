@@ -26,6 +26,10 @@ def get_access_token(force_refresh=False):
     """
     now = time.time()
     
+    if force_refresh:
+        _TOKEN_CACHE["token"] = None
+        _TOKEN_CACHE["expires_at"] = 0
+    
     if not force_refresh and _TOKEN_CACHE["token"] and _TOKEN_CACHE["expires_at"] > (now + 300):
         return _TOKEN_CACHE["token"]
 
@@ -37,6 +41,8 @@ def get_access_token(force_refresh=False):
                 "grant_type": "client_credentials",
                 "scope": SCOPE,
             }, timeout=30)
+            if resp.status_code in (400, 401, 403):
+                print(f"[Auth Error] Uber OAuth endpoint returned HTTP {resp.status_code}: {resp.text}")
             resp.raise_for_status()
             data = resp.json()
             token = data["access_token"]
@@ -46,10 +52,10 @@ def get_access_token(force_refresh=False):
             _TOKEN_CACHE["expires_at"] = now + expires_in
             return token
         except Exception as e:
-            if UBER_ACCESS_TOKEN:
+            if UBER_ACCESS_TOKEN and not force_refresh:
                 print(f"Warning: OAuth token generation failed ({e}), falling back to static token.")
                 return UBER_ACCESS_TOKEN
-            raise e
+            raise RuntimeError(f"Uber OAuth Authentication Failed (HTTP {getattr(e, 'response', None) and e.response.status_code}): Check UBER_CLIENT_ID and UBER_CLIENT_SECRET in Secret Manager. Details: {e}")
 
     if UBER_ACCESS_TOKEN:
         return UBER_ACCESS_TOKEN
