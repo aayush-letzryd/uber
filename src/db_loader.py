@@ -295,7 +295,7 @@ def load_trips_csv(conn, filepath_or_df, org_name, run_id=None, report_id=None, 
                     report_fetch_window_start  = EXCLUDED.report_fetch_window_start,
                     report_fetch_window_end    = EXCLUDED.report_fetch_window_end,
                     ingested_at                = CURRENT_TIMESTAMP;
-            """, rows)
+            """, rows, page_size=2000)
             conn.commit()
         except Exception as e:
             if conn and not conn.closed:
@@ -360,7 +360,7 @@ def load_order_transactions_csv(conn, filepath_or_df, org_name, run_id=None, rep
                     report_fetch_window_start  = EXCLUDED.report_fetch_window_start,
                     report_fetch_window_end    = EXCLUDED.report_fetch_window_end,
                     ingested_at                = CURRENT_TIMESTAMP;
-            """, rows)
+            """, rows, page_size=2000)
             conn.commit()
         except Exception as e:
             if conn and not conn.closed:
@@ -442,7 +442,7 @@ def load_driver_csv(conn, filepath_or_df, window_start, window_end, org_name, ru
                     source_report_id                                     = EXCLUDED.source_report_id,
                     run_id                                               = EXCLUDED.run_id,
                     ingested_at                                          = CURRENT_TIMESTAMP;
-            """, rows)
+            """, rows, page_size=2000)
             conn.commit()
         except Exception as e:
             if conn and not conn.closed:
@@ -534,7 +534,7 @@ def load_org_csv(conn, filepath_or_df, window_start, window_end, run_id=None, re
                     source_report_id                                     = EXCLUDED.source_report_id,
                     run_id                                               = EXCLUDED.run_id,
                     ingested_at                                          = CURRENT_TIMESTAMP;
-            """, rows)
+            """, rows, page_size=2000)
             conn.commit()
         except Exception as e:
             if conn and not conn.closed:

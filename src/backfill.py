@@ -118,6 +118,17 @@ def run_backfill(start_date, end_date):
 
         stats["fleets"] = fleets_processed_count
 
+        # Post-ingestion sync: Decoupled single-shot refresh of core_uber summary tables
+        if conn and not conn.closed and (stats["trips"] + stats["transactions"]) > 0:
+            try:
+                print("\n[CORE SYNC] Triggering post-ingestion summary sync for core_uber...")
+                with conn.cursor() as sync_cur:
+                    sync_cur.execute("CALL sp_sync_core_uber();")
+                conn.commit()
+                print("[CORE SYNC] core_uber aggregation completed successfully.")
+            except Exception as sync_err:
+                print(f"[CORE SYNC WARNING] Non-fatal downstream sync warning: {sync_err}")
+
     except Exception as e:
         status = "FAILED"
         error_log.append(f"Fatal backfill error: {e}")
