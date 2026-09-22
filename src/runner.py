@@ -39,8 +39,11 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     if not target_date:
         target_date = now_ist.date() - datetime.timedelta(days=1)
 
+    # 28-Hour Safety Window: target_date 00:00:00 IST -> (target_date + 1 day) 04:00:00 IST
+    # Captures full calendar day PLUS early morning 4 AM Uber operational cutoff
     start_dt = datetime.datetime.combine(target_date, datetime.time.min, tzinfo=ist_tz)
-    end_dt = datetime.datetime.combine(target_date, datetime.time.max, tzinfo=ist_tz)
+    next_day = target_date + datetime.timedelta(days=1)
+    end_dt = datetime.datetime.combine(next_day, datetime.time(hour=4, minute=0, second=0), tzinfo=ist_tz)
 
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
