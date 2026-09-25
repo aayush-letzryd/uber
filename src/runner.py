@@ -42,7 +42,7 @@ def is_another_execution_running(conn, current_run_id):
                 SELECT run_id, created_at 
                 FROM uber_pipeline_execution_logs 
                 WHERE status = 'RUNNING' 
-                  AND created_at > (NOW() - INTERVAL '2.5 hours')
+                  AND created_at > (NOW() - INTERVAL '115 minutes')
                   AND run_id != %s;
             """, (current_run_id,))
             row = cur.fetchone()
@@ -66,11 +66,11 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     if not target_date:
         target_date = now_ist.date() - datetime.timedelta(days=1)
 
-    # 31-Hour Safety Window: target_date 00:00:00 IST -> (target_date + 1 day) 07:00:00 IST
-    # Captures full calendar day PLUS data right up to the 7:00 AM execution time
+    # 29-Hour Safety Window: target_date 00:00:00 IST -> (target_date + 1 day) 05:00:00 IST
+    # Captures full calendar day PLUS data right up to the 5:00 AM execution time
     start_dt = datetime.datetime.combine(target_date, datetime.time.min, tzinfo=ist_tz)
     next_day = target_date + datetime.timedelta(days=1)
-    end_dt = datetime.datetime.combine(next_day, datetime.time(hour=7, minute=0, second=0), tzinfo=ist_tz)
+    end_dt = datetime.datetime.combine(next_day, datetime.time(hour=5, minute=0, second=0), tzinfo=ist_tz)
 
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
