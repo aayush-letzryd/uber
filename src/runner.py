@@ -25,6 +25,16 @@ REPORT_TYPES = [
     "REPORT_TYPE_PAYMENTS_ORGANIZATION",
 ]
 
+def ensure_connection(conn):
+    if not conn or conn.closed != 0:
+        return get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1;")
+        return conn
+    except Exception:
+        return get_connection()
+
 def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     """
     Executes an idempotent ingestion run for target_date (defaults to yesterday in IST).
@@ -84,7 +94,6 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
             org_name = org.get("name", "Unknown Fleet")
             print(f"\n[{i}/{len(orgs)}] Operating Fleet: {org_name} (ID: {org_uuid})")
             fleet_has_error = False
-
             for report_type in REPORT_TYPES:
                 print(f"  * Fetching {report_type}...")
                 try:
@@ -92,6 +101,8 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
                     report_id = get_or_generate_report(active_token, org_uuid, report_type, start_ms, end_ms)
                     wait_for_report(active_token, org_uuid, report_id)
                     path = download_report(active_token, org_uuid, report_id, report_type, org_name)
+
+                    conn = ensure_connection(conn)
 
                     if report_type == "REPORT_TYPE_TRIP_ACTIVITY":
                         cnt = load_trips_csv(conn, path, org_name, run_id, report_id, start_dt, end_dt)

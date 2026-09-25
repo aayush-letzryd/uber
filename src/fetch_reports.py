@@ -12,7 +12,7 @@ from src.auth import get_access_token
 from config.settings import BASE_API_URL
 
 POLL_INTERVAL_SECONDS = 20
-POLL_TIMEOUT_SECONDS = 15 * 60
+POLL_TIMEOUT_SECONDS = 30 * 60
 
 def _get_retry_wait(attempt, base_wait=30, resp=None):
     if resp is not None:
