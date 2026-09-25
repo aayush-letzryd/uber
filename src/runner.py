@@ -35,6 +35,23 @@ def ensure_connection(conn):
     except Exception:
         return get_connection()
 
+def is_another_execution_running(conn, current_run_id):
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT run_id, created_at 
+                FROM uber_pipeline_execution_logs 
+                WHERE status = 'RUNNING' 
+                  AND created_at > (NOW() - INTERVAL '45 minutes')
+                  AND run_id != %s;
+            """, (current_run_id,))
+            row = cur.fetchone()
+            if row:
+                return row
+    except Exception as e:
+        print(f"    [Warning] Concurrency check query failed: {e}")
+    return None
+
 def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     """
     Executes an idempotent ingestion run for target_date (defaults to yesterday in IST).
@@ -49,11 +66,11 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
     if not target_date:
         target_date = now_ist.date() - datetime.timedelta(days=1)
 
-    # 32-Hour Full Safety Window: target_date 00:00:00 IST -> (target_date + 1 day) 08:00:00 IST
-    # Captures full calendar day PLUS data right up to the 8:00 AM execution time
+    # 31-Hour Safety Window: target_date 00:00:00 IST -> (target_date + 1 day) 07:00:00 IST
+    # Captures full calendar day PLUS data right up to the 7:00 AM execution time
     start_dt = datetime.datetime.combine(target_date, datetime.time.min, tzinfo=ist_tz)
     next_day = target_date + datetime.timedelta(days=1)
-    end_dt = datetime.datetime.combine(next_day, datetime.time(hour=8, minute=0, second=0), tzinfo=ist_tz)
+    end_dt = datetime.datetime.combine(next_day, datetime.time(hour=7, minute=0, second=0), tzinfo=ist_tz)
 
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
@@ -72,6 +89,13 @@ def run_pipeline(target_date=None, run_type="DAILY_SCHEDULED"):
 
     try:
         conn = get_connection()
+        active_run = is_another_execution_running(conn, run_id)
+        if active_run:
+            print(f"\n[CONCURRENCY LOCK] Another execution (Run ID: {active_run[0]}, started at {active_run[1]}) is currently running.")
+            print("[CONCURRENCY LOCK] Exiting cleanly to prevent overlapping runs.")
+            conn.close()
+            return True
+
         log_execution_start(conn, run_id, run_type, start_dt, end_dt)
     except Exception as e:
         print(f"[ERROR] Could not initialize audit log in DB: {e}")
