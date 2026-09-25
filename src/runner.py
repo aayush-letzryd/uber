@@ -42,7 +42,7 @@ def is_another_execution_running(conn, current_run_id):
                 SELECT run_id, created_at 
                 FROM uber_pipeline_execution_logs 
                 WHERE status = 'RUNNING' 
-                  AND created_at > (NOW() - INTERVAL '115 minutes')
+                  AND created_at > (NOW() - INTERVAL '170 minutes')
                   AND run_id != %s;
             """, (current_run_id,))
             row = cur.fetchone()
